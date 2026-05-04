@@ -1,0 +1,35 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Jupyter notebook runtime files
+.ipynb_checkpoints/
+
+# Generated model outputs
+outputs/
+weather_cache/
+
+# Local environment/config secrets
+.env
+.env.*
+
+# IDE/editor metadata
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store

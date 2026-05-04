@@ -1,0 +1,49 @@
+# Raspberry Pi PV simulation configuration.
+#
+# Percentages can be written as fractions (0.50) or percentages (50).
+# Panel azimuth uses pvlib convention: 0=true north, 90=east, 180=south,
+# 270=west. For New Zealand, true north is the usual fixed-panel direction.
+
+simulation:
+  year: 2025
+
+location:
+  name: New Plymouth, New Zealand
+  latitude: -39.0556
+  longitude: 174.0752
+  timezone: Pacific/Auckland
+
+pv_panel:
+  rated_power_w: 100.0
+  tilt_deg: 45.0
+  azimuth_deg: 0.0
+  gamma_pdc_per_c: -0.004
+
+battery:
+  capacity_ah: 20.0
+  nominal_voltage_v: 12.8
+  min_soc: 0.10
+  max_soc: 0.80
+
+load_profile:
+  idle:
+    fraction: 0.25
+    power_w: 3.5
+  moderate:
+    fraction: 0.25
+    power_w: 6.0
+  heavy:
+    fraction: 0.5
+    power_w: 11.5
+
+losses:
+  charge_efficiency: 0.90
+
+weather_cache:
+  enabled: true
+  directory: weather_cache
+  refresh: false
+
+output:
+  save_plot: outputs/raspi_pv_2025.png
+  show_plot: true
