@@ -10,6 +10,11 @@ The main script is [raspi_pv_year_sim.py](./raspi_pv_year_sim.py). Runtime
 parameters are normally edited in [raspi_pv_config.yaml](./raspi_pv_config.yaml)
 so repeated modelling cycles can be run without long command lines.
 
+The hardware concept is based around the
+[PV Pi board](https://www.kickstarter.com/projects/pvpi/pv-pi-power-your-raspberry-pi-with-the-sun),
+a solar power board for Raspberry Pi projects associated with
+[Auto Ecology](https://www.auto-ecology.com/).
+
 ## Example Output
 
 <p>
