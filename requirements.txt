@@ -4,3 +4,4 @@ pandas
 pvlib
 requests
 PyYAML
+PyQt6

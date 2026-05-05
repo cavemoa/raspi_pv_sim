@@ -26,10 +26,12 @@ DEFAULT_CONFIG_PATH = Path("raspi_pv_config.yaml")
 
 
 def default_config() -> dict:
+    """Return the built-in fallback configuration used when no YAML file exists."""
     year = previous_calendar_year()
     return {
         "simulation": {
             "year": year,
+            "operation_mode": "sunset_to_sunrise",
         },
         "location": {
             "name": "New Plymouth, New Zealand",
@@ -80,6 +82,7 @@ def default_config() -> dict:
 
 @dataclass(frozen=True)
 class LoadProfile:
+    """Raspberry Pi load mix and wattage assumptions for one operating period."""
     idle_pct: float
     moderate_pct: float
     heavy_pct: float
@@ -89,6 +92,7 @@ class LoadProfile:
 
     @property
     def average_w(self) -> float:
+        """Return the weighted average Raspberry Pi load in watts."""
         return (
             self.idle_pct * self.idle_w
             + self.moderate_pct * self.moderate_w
@@ -98,7 +102,9 @@ class LoadProfile:
 
 @dataclass(frozen=True)
 class SystemConfig:
+    """Physical system, site, weather-cache, and operation-mode settings."""
     year: int
+    operation_mode: str = "sunset_to_sunrise"
     location_name: str = "New Plymouth, New Zealand"
     latitude: float = -39.0556
     longitude: float = 174.0752
@@ -118,22 +124,27 @@ class SystemConfig:
 
     @property
     def nominal_battery_wh(self) -> float:
+        """Return nominal battery energy capacity in watt-hours."""
         return self.battery_ah * self.battery_voltage
 
     @property
     def min_battery_wh(self) -> float:
+        """Return the shutdown energy threshold in watt-hours."""
         return self.nominal_battery_wh * self.min_soc_fraction
 
     @property
     def max_battery_wh(self) -> float:
+        """Return the maximum allowed battery energy in watt-hours."""
         return self.nominal_battery_wh * self.max_soc_fraction
 
     @property
     def operating_battery_wh(self) -> float:
+        """Return usable energy between configured minimum and maximum SOC."""
         return self.max_battery_wh - self.min_battery_wh
 
 
 def parse_pct(value: str) -> float:
+    """Parse a fraction or whole percentage into a 0-1 fraction."""
     pct = float(value)
     if pct > 1:
         pct /= 100.0
@@ -141,11 +152,23 @@ def parse_pct(value: str) -> float:
 
 
 def previous_calendar_year(today: dt.date | None = None) -> int:
+    """Return the calendar year before today, or before the supplied date."""
     today = today or dt.date.today()
     return today.year - 1
 
 
+def operation_mode_label(operation_mode: str) -> str:
+    """Return a human-readable label for an operation-mode identifier."""
+    labels = {
+        "continuous": "continuous operation",
+        "sunrise_to_sunset": "sunrise-to-sunset operation",
+        "sunset_to_sunrise": "sunset-to-sunrise operation",
+    }
+    return labels.get(operation_mode, operation_mode.replace("_", " "))
+
+
 def deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override values into a copy of a base dictionary."""
     merged = deepcopy(base)
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -156,6 +179,7 @@ def deep_merge(base: dict, override: dict) -> dict:
 
 
 def load_yaml_config(config_path: Path | None) -> dict:
+    """Load YAML configuration, falling back to defaults for missing keys."""
     config = default_config()
     if config_path is None:
         if not DEFAULT_CONFIG_PATH.exists():
@@ -173,6 +197,7 @@ def load_yaml_config(config_path: Path | None) -> dict:
 
 
 def get_nested(config: dict, path: tuple[str, ...]):
+    """Read a nested value from a configuration dictionary by key path."""
     current = config
     for key in path:
         current = current[key]
@@ -180,6 +205,7 @@ def get_nested(config: dict, path: tuple[str, ...]):
 
 
 def set_nested(config: dict, path: tuple[str, ...], value) -> None:
+    """Set a nested configuration value by key path."""
     current = config
     for key in path[:-1]:
         current = current[key]
@@ -187,8 +213,10 @@ def set_nested(config: dict, path: tuple[str, ...], value) -> None:
 
 
 def apply_cli_overrides(config: dict, args: argparse.Namespace) -> dict:
+    """Apply non-null command-line arguments over loaded YAML settings."""
     cli_map = {
         "year": ("simulation", "year"),
+        "operation_mode": ("simulation", "operation_mode"),
         "idle_pct": ("load_profile", "idle", "fraction"),
         "moderate_pct": ("load_profile", "moderate", "fraction"),
         "heavy_pct": ("load_profile", "heavy", "fraction"),
@@ -225,6 +253,7 @@ def apply_cli_overrides(config: dict, args: argparse.Namespace) -> dict:
 
 
 def build_models_from_config(config: dict) -> tuple[SystemConfig, LoadProfile, Path | None, bool]:
+    """Convert raw configuration dictionaries into typed simulation models."""
     load = LoadProfile(
         idle_pct=parse_pct(str(get_nested(config, ("load_profile", "idle", "fraction")))),
         moderate_pct=parse_pct(str(get_nested(config, ("load_profile", "moderate", "fraction")))),
@@ -235,6 +264,7 @@ def build_models_from_config(config: dict) -> tuple[SystemConfig, LoadProfile, P
     )
     config_model = SystemConfig(
         year=int(get_nested(config, ("simulation", "year"))),
+        operation_mode=str(get_nested(config, ("simulation", "operation_mode"))),
         location_name=str(get_nested(config, ("location", "name"))),
         latitude=float(get_nested(config, ("location", "latitude"))),
         longitude=float(get_nested(config, ("location", "longitude"))),
@@ -259,12 +289,14 @@ def build_models_from_config(config: dict) -> tuple[SystemConfig, LoadProfile, P
 
 
 def weather_cache_path(config: SystemConfig) -> Path:
+    """Build the cache CSV path for a year and geographic coordinate."""
     lat = f"{config.latitude:.4f}".replace("-", "S").replace(".", "p")
     lon = f"{config.longitude:.4f}".replace("-", "W").replace(".", "p")
     return config.weather_cache_dir / f"open_meteo_{config.year}_{lat}_{lon}.csv"
 
 
 def read_cached_weather(cache_path: Path, timezone: str) -> pd.DataFrame:
+    """Read cached Open-Meteo hourly weather and convert it to local time."""
     weather = pd.read_csv(cache_path)
     if "time" not in weather.columns:
         raise ValueError(f"Cached weather file has no 'time' column: {cache_path}")
@@ -273,11 +305,13 @@ def read_cached_weather(cache_path: Path, timezone: str) -> pd.DataFrame:
 
 
 def write_cached_weather(cache_path: Path, weather_utc: pd.DataFrame) -> None:
+    """Write UTC Open-Meteo hourly weather to a local CSV cache file."""
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     weather_utc.to_csv(cache_path, index_label="time")
 
 
 def fetch_open_meteo_weather(config: SystemConfig) -> pd.DataFrame:
+    """Load historical weather from cache or download it from Open-Meteo."""
     cache_path = weather_cache_path(config)
     if config.weather_cache_enabled and not config.refresh_weather_cache and cache_path.exists():
         try:
@@ -329,6 +363,7 @@ def fetch_open_meteo_weather(config: SystemConfig) -> pd.DataFrame:
 
 
 def sun_times_for_year(config: SystemConfig) -> pd.DataFrame:
+    """Calculate local sunrise, sunset, and solar transit for each modelled date."""
     loc = Location(config.latitude, config.longitude, tz=config.timezone)
     dates = pd.date_range(
         f"{config.year}-01-01",
@@ -348,6 +383,7 @@ def sun_times_for_year(config: SystemConfig) -> pd.DataFrame:
 
 
 def add_pv_generation(weather: pd.DataFrame, config: SystemConfig) -> pd.DataFrame:
+    """Add PVWatts power and usable PV energy columns to hourly weather data."""
     loc = Location(config.latitude, config.longitude, tz=config.timezone)
     solar_position = loc.get_solarposition(weather.index)
 
@@ -385,23 +421,37 @@ def add_pv_generation(weather: pd.DataFrame, config: SystemConfig) -> pd.DataFra
 
 
 def build_night_windows(config: SystemConfig, load: LoadProfile) -> pd.DataFrame:
+    """Build one scheduled operating window per day for the selected mode."""
     sun = sun_times_for_year(config)
     records = []
     start = dt.date(config.year, 1, 1)
     end = dt.date(config.year, 12, 31)
 
-    for night_date in pd.date_range(start, end, freq="D").date:
-        next_date = night_date + dt.timedelta(days=1)
-        sunset = sun.loc[night_date, "sunset"]
-        sunrise = sun.loc[next_date, "sunrise"]
-        night_hours = (sunrise - sunset).total_seconds() / 3600.0
+    for operation_date in pd.date_range(start, end, freq="D").date:
+        next_date = operation_date + dt.timedelta(days=1)
+        if config.operation_mode == "sunset_to_sunrise":
+            operation_start = sun.loc[operation_date, "sunset"]
+            operation_end = sun.loc[next_date, "sunrise"]
+        elif config.operation_mode == "sunrise_to_sunset":
+            operation_start = sun.loc[operation_date, "sunrise"]
+            operation_end = sun.loc[operation_date, "sunset"]
+        elif config.operation_mode == "continuous":
+            operation_start = pd.Timestamp(operation_date, tz=config.timezone)
+            operation_end = pd.Timestamp(next_date, tz=config.timezone)
+        else:
+            raise ValueError(
+                "operation_mode must be one of continuous, sunrise_to_sunset, "
+                f"or sunset_to_sunrise (received {config.operation_mode!r})."
+            )
+
+        operation_hours = (operation_end - operation_start).total_seconds() / 3600.0
         records.append(
             {
-                "night_date": pd.Timestamp(night_date),
-                "sunset": sunset,
-                "sunrise": sunrise,
-                "night_hours": night_hours,
-                "required_wh": night_hours * load.average_w,
+                "night_date": pd.Timestamp(operation_date),
+                "sunset": operation_start,
+                "sunrise": operation_end,
+                "night_hours": operation_hours,
+                "required_wh": operation_hours * load.average_w,
             }
         )
 
@@ -414,6 +464,7 @@ def overlap_hours(
     window_start: pd.Timestamp,
     window_end: pd.Timestamp,
 ) -> float:
+    """Return how many hours two timestamp intervals overlap."""
     latest_start = max(interval_start, window_start)
     earliest_end = min(interval_end, window_end)
     seconds = (earliest_end - latest_start).total_seconds()
@@ -425,6 +476,7 @@ def assign_night_load(
     night_windows: pd.DataFrame,
     load: LoadProfile,
 ) -> pd.DataFrame:
+    """Assign load energy to hourly rows that overlap each operating window."""
     result = hourly.copy()
     result["night_date"] = pd.NaT
     result["load_energy_wh"] = 0.0
@@ -446,9 +498,10 @@ def assign_night_load(
 
 
 def simulate_battery(hourly: pd.DataFrame, config: SystemConfig) -> pd.DataFrame:
+    """Simulate battery SOC, unmet load, and shutdown state through the year."""
     result = hourly.copy()
     soc_wh = config.max_battery_wh
-    shutdown_nights = set()
+    shutdown_periods = set()
     soc_values = []
     unmet_values = []
     running_values = []
@@ -458,8 +511,8 @@ def simulate_battery(hourly: pd.DataFrame, config: SystemConfig) -> pd.DataFrame
         unmet = 0.0
         running = True
         if row["load_energy_wh"] > 0:
-            night_date = row["night_date"]
-            if pd.notna(night_date) and night_date in shutdown_nights:
+            period_date = row["night_date"]
+            if pd.notna(period_date) and period_date in shutdown_periods:
                 running = False
                 unmet = row["load_energy_wh"]
             else:
@@ -467,8 +520,8 @@ def simulate_battery(hourly: pd.DataFrame, config: SystemConfig) -> pd.DataFrame
                 supplied = min(available_wh, row["load_energy_wh"])
                 soc_wh -= supplied
                 unmet = row["load_energy_wh"] - supplied
-                if unmet > 0.01 and pd.notna(night_date):
-                    shutdown_nights.add(night_date)
+                if unmet > 0.01 and pd.notna(period_date):
+                    shutdown_periods.add(period_date)
                     running = False
 
         soc_values.append(soc_wh)
@@ -487,6 +540,7 @@ def daily_summary(
     night_windows: pd.DataFrame,
     config: SystemConfig,
 ) -> pd.DataFrame:
+    """Summarize PV production, operating demand, SOC, and failures by day."""
     local_dates = pd.Series(hourly.index.date, index=hourly.index)
     daily_pv = hourly.groupby(local_dates)["usable_pv_energy_wh"].sum()
     daily_pv.index = pd.to_datetime(daily_pv.index)
@@ -511,7 +565,106 @@ def daily_summary(
     return nightly
 
 
+def validate_configuration(config: SystemConfig, load: LoadProfile) -> None:
+    """Validate operation mode, load fractions, and battery SOC limits."""
+    valid_modes = {"continuous", "sunrise_to_sunset", "sunset_to_sunrise"}
+    if config.operation_mode not in valid_modes:
+        raise ValueError(
+            "operation_mode must be one of continuous, sunrise_to_sunset, "
+            f"or sunset_to_sunrise (received {config.operation_mode!r})."
+        )
+    total_load_fraction = load.idle_pct + load.moderate_pct + load.heavy_pct
+    if not np.isclose(total_load_fraction, 1.0, atol=0.001):
+        raise ValueError(
+            "Load percentages must sum to 100% "
+            f"(received {total_load_fraction:.2%})."
+        )
+    if not 0 <= config.min_soc_fraction < config.max_soc_fraction <= 1:
+        raise ValueError(
+            "Battery SOC limits must satisfy 0 <= min_soc < max_soc <= 100% "
+            f"(received min={config.min_soc_fraction:.1%}, max={config.max_soc_fraction:.1%})."
+        )
+
+
+def run_simulation(
+    config: SystemConfig,
+    load: LoadProfile,
+    status_callback=None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run the full weather, PV, load, battery, and daily-summary pipeline."""
+    def update(message: str) -> None:
+        """Send progress to a callback when provided, otherwise print it."""
+        if status_callback:
+            status_callback(message)
+        else:
+            print(message)
+
+    validate_configuration(config, load)
+
+    update(f"Calculating {operation_mode_label(config.operation_mode)} windows...")
+    night_windows = build_night_windows(config, load)
+
+    update("Loading Open-Meteo historical weather...")
+    weather = fetch_open_meteo_weather(config)
+    sim_start = pd.Timestamp(f"{config.year}-01-01 00:00", tz=config.timezone)
+    sim_end = night_windows["sunrise"].max().ceil("h")
+    weather = weather.loc[(weather.index >= sim_start) & (weather.index < sim_end)]
+
+    update("Calculating PV generation...")
+    hourly = add_pv_generation(weather, config)
+    hourly = assign_night_load(hourly, night_windows, load)
+
+    update("Simulating battery state of charge...")
+    hourly = simulate_battery(hourly, config)
+    daily = daily_summary(hourly, night_windows, config)
+    update("Simulation complete.")
+    return hourly, daily
+
+
 def print_monthly_report(daily: pd.DataFrame, config: SystemConfig, load: LoadProfile) -> None:
+    """Print monthly reliability, energy, SOC, and shutdown-severity statistics."""
+    monthly = monthly_summary(daily, load)
+
+    print()
+    print("=" * 72)
+    print(f"Raspberry Pi PV simulation: {config.location_name}, {config.year}")
+    print("=" * 72)
+    print(f"Operation mode: {operation_mode_label(config.operation_mode)}")
+    print(f"Panel: {config.panel_w:.0f} W, tilt {config.panel_tilt_deg:.0f} deg, azimuth {config.panel_azimuth_deg:.0f} deg true north")
+    print(
+        f"Battery: {config.battery_ah:.0f} Ah @ {config.battery_voltage:.1f} V "
+        f"({config.nominal_battery_wh:.0f} Wh nominal, "
+        f"{config.operating_battery_wh:.0f} Wh between "
+        f"{config.min_soc_fraction:.0%}-{config.max_soc_fraction:.0%} SOC)"
+    )
+    print(
+        "Load: "
+        f"{load.average_w:.2f} W average "
+        f"(idle {load.idle_pct:.0%}, moderate {load.moderate_pct:.0%}, heavy {load.heavy_pct:.0%})"
+    )
+    print(f"Charge efficiency: {config.charge_efficiency:.0%}")
+    print("-" * 72)
+
+    for _, row in monthly.iterrows():
+        print(str(row["month"]).upper())
+        print(f"  Sufficient operating periods        : {int(row['complete_periods']):2d} / {int(row['total_periods']):2d}")
+        print(f"  Early shutdown periods              : {int(row['early_shutdown_periods']):2d}")
+        print(f"  Days with solar energy surplus      : {int(row['solar_surplus_days']):2d}")
+        print(f"  Days battery reached max SOC        : {int(row['max_soc_days']):2d}")
+        print(f"  Mean usable PV generation           : {row['mean_usable_pv_wh']:6.0f} Wh/day")
+        print(f"  Mean operating requirement          : {row['mean_required_wh']:6.0f} Wh/period")
+        print(f"  Mean daily energy margin            : {row['mean_margin_wh']:6.0f} Wh")
+        print(f"  Mean operating duration             : {row['mean_operating_hours']:6.2f} h")
+        print(f"  Lowest operating-period SOC         : {row['lowest_soc_pct']:6.1f} %")
+        print(f"  Total unmet load                    : {row['total_unmet_wh']:6.1f} Wh")
+        if row["early_shutdown_periods"] > 0:
+            print(f"  Operating time lost to shutdowns    : {row['runtime_lost_pct']:6.1f} %")
+            print(f"  Max time lost in one period         : {row['max_time_lost_hours']:6.2f} h")
+        print("-" * 72)
+
+
+def monthly_summary(daily: pd.DataFrame, load: LoadProfile) -> pd.DataFrame:
+    """Return the monthly statistics used by the CLI report and GUI table."""
     monthly = daily.groupby(daily.index.month).agg(
         total_days=("early_shutdown", "count"),
         complete_nights=("early_shutdown", lambda values: int((~values).sum())),
@@ -528,45 +681,27 @@ def print_monthly_report(daily: pd.DataFrame, config: SystemConfig, load: LoadPr
         unmet_wh=("unmet_load_wh", "sum"),
     )
 
-    print()
-    print("=" * 72)
-    print(f"Raspberry Pi PV simulation: {config.location_name}, {config.year}")
-    print("=" * 72)
-    print(f"Panel: {config.panel_w:.0f} W, tilt {config.panel_tilt_deg:.0f} deg, azimuth {config.panel_azimuth_deg:.0f} deg true north")
-    print(
-        f"Battery: {config.battery_ah:.0f} Ah @ {config.battery_voltage:.1f} V "
-        f"({config.nominal_battery_wh:.0f} Wh nominal, "
-        f"{config.operating_battery_wh:.0f} Wh between "
-        f"{config.min_soc_fraction:.0%}-{config.max_soc_fraction:.0%} SOC)"
+    result = pd.DataFrame(
+        {
+            "month": [dt.date(2001, int(month), 1).strftime("%B") for month in monthly.index],
+            "total_periods": monthly["total_days"].astype(int),
+            "complete_periods": monthly["complete_nights"].astype(int),
+            "early_shutdown_periods": monthly["early_shutdowns"].astype(int),
+            "solar_surplus_days": monthly["solar_excess_days"].astype(int),
+            "max_soc_days": monthly["full_battery_days"].astype(int),
+            "mean_usable_pv_wh": monthly["mean_daily_pv_wh"],
+            "mean_required_wh": monthly["mean_required_wh"],
+            "mean_margin_wh": monthly["mean_margin_wh"],
+            "mean_operating_hours": monthly["mean_night_hours"],
+            "lowest_soc_pct": monthly["lowest_soc_pct"],
+            "total_unmet_wh": monthly["unmet_wh"],
+        }
     )
-    print(
-        "Load: "
-        f"{load.average_w:.2f} W average "
-        f"(idle {load.idle_pct:.0%}, moderate {load.moderate_pct:.0%}, heavy {load.heavy_pct:.0%})"
-    )
-    print(f"Charge efficiency: {config.charge_efficiency:.0%}")
-    print("-" * 72)
-
-    for month, row in monthly.iterrows():
-        month_name = dt.date(config.year, int(month), 1).strftime("%B").upper()
-        print(month_name)
-        print(f"  Sufficient sunset-to-sunrise nights : {int(row['complete_nights']):2d} / {int(row['total_days']):2d}")
-        print(f"  Early shutdown nights               : {int(row['early_shutdowns']):2d}")
-        print(f"  Days with solar energy surplus      : {int(row['solar_excess_days']):2d}")
-        print(f"  Days battery reached max SOC        : {int(row['full_battery_days']):2d}")
-        print(f"  Mean usable PV generation           : {row['mean_daily_pv_wh']:6.0f} Wh/day")
-        print(f"  Mean overnight requirement          : {row['mean_required_wh']:6.0f} Wh/night")
-        print(f"  Mean daily energy margin            : {row['mean_margin_wh']:6.0f} Wh")
-        print(f"  Mean night duration                 : {row['mean_night_hours']:6.2f} h")
-        print(f"  Lowest overnight battery SOC        : {row['lowest_soc_pct']:6.1f} %")
-        print(f"  Total unmet load                    : {row['unmet_wh']:6.1f} Wh")
-        if row["early_shutdowns"] > 0:
-            lost_hours = row["unmet_wh"] / load.average_w
-            lost_pct = lost_hours / row["total_night_hours"] * 100.0
-            max_lost_hours = row["max_unmet_wh"] / load.average_w
-            print(f"  Operating time lost to shutdowns    : {lost_pct:6.1f} %")
-            print(f"  Max time lost on one night          : {max_lost_hours:6.2f} h")
-        print("-" * 72)
+    lost_hours = result["total_unmet_wh"] / load.average_w if load.average_w else 0.0
+    result["runtime_lost_pct"] = lost_hours / monthly["total_night_hours"].to_numpy() * 100.0
+    result["max_time_lost_hours"] = monthly["max_unmet_wh"].to_numpy() / load.average_w if load.average_w else 0.0
+    result.loc[result["early_shutdown_periods"] == 0, ["runtime_lost_pct", "max_time_lost_hours"]] = 0.0
+    return result
 
 
 def make_plot(
@@ -576,10 +711,32 @@ def make_plot(
     output_path: Path | None,
     show_plot: bool,
 ) -> None:
-    fig, axes = plt.subplots(
+    """Create, optionally save, and optionally show the matplotlib results plot."""
+    fig = plt.figure(figsize=(15, 11))
+    populate_results_figure(fig, hourly, daily, config)
+
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(output_path, dpi=160)
+        print(f"Saved plot to {output_path}")
+
+    if show_plot:
+        plt.show()
+    else:
+        plt.close(fig)
+
+
+def populate_results_figure(
+    fig,
+    hourly: pd.DataFrame,
+    daily: pd.DataFrame,
+    config: SystemConfig,
+) -> None:
+    """Populate an existing matplotlib figure with the three result subplots."""
+    fig.clear()
+    axes = fig.subplots(
         3,
         1,
-        figsize=(15, 11),
         sharex=False,
         gridspec_kw={"height_ratios": [2.0, 1.8, 1.0]},
     )
@@ -606,10 +763,10 @@ def make_plot(
         color="black",
         linestyle="--",
         linewidth=1.5,
-        label="Daily required overnight energy",
+        label="Daily required operating energy",
     )
     axes[0].set_ylabel("Energy (Wh)")
-    axes[0].set_title("Daily PV Energy Production and Overnight Requirement")
+    axes[0].set_title("Daily PV Energy Production and Operating Requirement")
     axes[0].grid(True, linestyle=":", alpha=0.55)
     axes[0].legend(loc="upper right")
 
@@ -638,11 +795,11 @@ def make_plot(
     axes[2].bar(daily.index, daily["energy_margin_wh"], color=colors, width=1.0)
     axes[2].axhline(0, color="black", linewidth=0.8)
     axes[2].set_ylabel("Margin (Wh)")
-    axes[2].set_title("Daily Solar Energy Margin for the Following Overnight Run")
+    axes[2].set_title("Daily Solar Energy Margin for Scheduled Operation")
     axes[2].legend(
         handles=[
-            Patch(facecolor="forestgreen", label="Solar surplus for overnight run"),
-            Patch(facecolor="firebrick", label="Solar shortfall for overnight run"),
+            Patch(facecolor="forestgreen", label="Solar surplus for operation"),
+            Patch(facecolor="firebrick", label="Solar shortfall for operation"),
         ],
         loc="upper right",
     )
@@ -653,21 +810,12 @@ def make_plot(
 
     fig.tight_layout()
 
-    if output_path:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output_path, dpi=160)
-        print(f"Saved plot to {output_path}")
-
-    if show_plot:
-        plt.show()
-    else:
-        plt.close(fig)
-
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for running the simulation without the UI."""
     parser = argparse.ArgumentParser(
         description=(
-            "Model PV and battery performance for a Raspberry Pi 5 overnight acoustic monitor. "
+            "Model PV and battery performance for a Raspberry Pi 5 acoustic monitor. "
             "Settings are read from raspi_pv_config.yaml by default when it exists; command-line "
             "arguments override YAML values."
         )
@@ -679,6 +827,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Ignore {DEFAULT_CONFIG_PATH} and use built-in defaults plus command-line overrides.",
     )
     parser.add_argument("--year", type=int, default=None, help="Calendar year to simulate.")
+    parser.add_argument(
+        "--operation-mode",
+        choices=["continuous", "sunrise_to_sunset", "sunset_to_sunrise"],
+        default=None,
+        help="When the Raspberry Pi should operate.",
+    )
     parser.add_argument("--idle-pct", type=parse_pct, default=None, help="Idle percentage or fraction.")
     parser.add_argument("--moderate-pct", type=parse_pct, default=None, help="Moderate-load percentage or fraction.")
     parser.add_argument("--heavy-pct", type=parse_pct, default=None, help="Heavy-load percentage or fraction.")
@@ -717,6 +871,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """CLI entry point: load configuration, run the model, report, and plot."""
     args = build_parser().parse_args()
     if args.no_config and args.config is not None:
         raise ValueError("Use either --config or --no-config, not both.")
@@ -724,34 +879,7 @@ def main() -> None:
     raw_config = default_config() if args.no_config else load_yaml_config(args.config)
     raw_config = apply_cli_overrides(raw_config, args)
     config, load, output_path, show_plot = build_models_from_config(raw_config)
-
-    total_load_fraction = load.idle_pct + load.moderate_pct + load.heavy_pct
-    if not np.isclose(total_load_fraction, 1.0, atol=0.001):
-        raise ValueError(
-            "Load percentages must sum to 100% "
-            f"(received {total_load_fraction:.2%})."
-        )
-    if not 0 <= config.min_soc_fraction < config.max_soc_fraction <= 1:
-        raise ValueError(
-            "Battery SOC limits must satisfy 0 <= min_soc < max_soc <= 100% "
-            f"(received min={config.min_soc_fraction:.1%}, max={config.max_soc_fraction:.1%})."
-        )
-
-    print("Calculating sunset-to-sunrise load windows...")
-    night_windows = build_night_windows(config, load)
-
-    print("Loading Open-Meteo historical weather...")
-    weather = fetch_open_meteo_weather(config)
-    sim_start = pd.Timestamp(f"{config.year}-01-01 00:00", tz=config.timezone)
-    sim_end = night_windows["sunrise"].max().ceil("h")
-    weather = weather.loc[(weather.index >= sim_start) & (weather.index < sim_end)]
-
-    print("Calculating PV generation...")
-    hourly = add_pv_generation(weather, config)
-    hourly = assign_night_load(hourly, night_windows, load)
-    print("Simulating battery state of charge...")
-    hourly = simulate_battery(hourly, config)
-    daily = daily_summary(hourly, night_windows, config)
+    hourly, daily = run_simulation(config, load)
 
     print_monthly_report(daily, config, load)
     make_plot(hourly, daily, config, output_path, show_plot=show_plot)

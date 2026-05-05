@@ -6,6 +6,7 @@
 
 simulation:
   year: 2025
+  operation_mode: sunset_to_sunrise
 
 location:
   name: New Plymouth, New Zealand
@@ -14,7 +15,7 @@ location:
   timezone: Pacific/Auckland
 
 pv_panel:
-  rated_power_w: 100.0
+  rated_power_w: 40.0
   tilt_deg: 45.0
   azimuth_deg: 0.0
   gamma_pdc_per_c: -0.004
@@ -27,14 +28,14 @@ battery:
 
 load_profile:
   idle:
-    fraction: 0.25
-    power_w: 3.5
+    fraction: 0.75
+    power_w: 2.4
   moderate:
-    fraction: 0.25
-    power_w: 6.0
+    fraction: 0.20
+    power_w: 5.0
   heavy:
-    fraction: 0.5
-    power_w: 11.5
+    fraction: 0.05
+    power_w: 8.9
 
 losses:
   charge_efficiency: 0.90
