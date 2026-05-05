@@ -21,6 +21,16 @@ a solar power board for Raspberry Pi projects associated with
 
 ## Quick Start
 
+Choose or create a parent directory for your code, then clone the repository
+from GitHub:
+
+```powershell
+mkdir \code
+cd \code
+git clone https://github.com/cavemoa/raspi_pv_sim.git
+cd raspi_pv_sim
+```
+
 Create a virtual environment and install the dependencies:
 
 ```powershell
